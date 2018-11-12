@@ -26,6 +26,13 @@ mutable struct RoombaParticleFilter <: POMDPs.Updater
     om_noise_coeff::Float64
 end
 
+mutable struct RoombaBelief
+    particleCollect::ParticleCollection{RoombaState}
+    observation
+    action
+    prevBelief::Union{Nothing, RoombaBelief}
+end
+
 # Resample function for weights in {0,1} necessary for bumper sensor
 function ParticleFilters.resample(br::BumperResampler, b::WeightedParticleBelief{RoombaState}, rng::AbstractRNG)
     new = RoombaState[]
@@ -59,17 +66,47 @@ function ParticleFilters.resample(lr::LidarResampler, b::WeightedParticleBelief{
     return ps
 end
 
-# Modified Update function adds noise to the actions that propagate particles
-function POMDPs.update(up::RoombaParticleFilter, b::ParticleCollection{RoombaState}, a, o)
-    ps = particles(b)
+# # Modified Update function adds noise to the actions that propagate particles
+# function POMDPs.update(up::RoombaParticleFilter, b::ParticleCollection{RoombaState}, a, o)
+#     ps = particles(b)
+#     pm = up.spf._particle_memory
+#     wm = up.spf._weight_memory
+#     resize!(pm, 0)
+#     resize!(wm, 0)
+#     sizehint!(pm, n_particles(b))
+#     sizehint!(wm, n_particles(b))
+#     all_terminal = true
+#     for i in 1:n_particles(b)
+#         s = ps[i]
+#         if !isterminal(up.spf.model, s)
+#             all_terminal = false
+#             # noise added here:
+#             a_pert = a + SVector(up.v_noise_coeff*(rand(up.spf.rng)-0.5), up.om_noise_coeff*(rand(up.spf.rng)-0.5))
+#             sp = generate_s(up.spf.model, s, a_pert, up.spf.rng)
+#             push!(pm, sp)
+#             push!(wm, obs_weight(up.spf.model, s, a_pert, sp, o))
+#         end
+#     end
+#     # if all particles are terminal, return previous belief state
+#     if all_terminal
+#         return b
+#     end
+
+#     return resample(up.spf.resample, WeightedParticleBelief{RoombaState}(pm, wm, sum(wm), nothing), up.spf.rng)
+# end
+
+function POMDPs.update(up::RoombaParticleFilter, b::RoombaBelief, a, o)
+#     ps = particles(b)
+    ps = particles(b.particleCollect)
+    
     pm = up.spf._particle_memory
     wm = up.spf._weight_memory
     resize!(pm, 0)
     resize!(wm, 0)
-    sizehint!(pm, n_particles(b))
-    sizehint!(wm, n_particles(b))
+    sizehint!(pm, n_particles(b.particleCollect))
+    sizehint!(wm, n_particles(b.particleCollect))
     all_terminal = true
-    for i in 1:n_particles(b)
+    for i in 1:n_particles(b.particleCollect)
         s = ps[i]
         if !isterminal(up.spf.model, s)
             all_terminal = false
@@ -84,11 +121,16 @@ function POMDPs.update(up::RoombaParticleFilter, b::ParticleCollection{RoombaSta
     if all_terminal
         return b
     end
-
-    return resample(up.spf.resample, WeightedParticleBelief{RoombaState}(pm, wm, sum(wm), nothing), up.spf.rng)
+    b_particle_collection = resample(up.spf.resample, WeightedParticleBelief{RoombaState}(pm, wm, sum(wm), nothing), up.spf.rng)
+    return RoombaBelief(b_particle_collection, o, a, b)
+#     return resample(up.spf.resample, WeightedParticleBelief{RoombaState}(pm, wm, sum(wm), nothing), up.spf.rng)
 end
+
 
 # initialize belief state
 function ParticleFilters.initialize_belief(up::RoombaParticleFilter, d::Any)
-    resample(up.spf.resample, d, up.spf.rng)
+    # return resample(up.spf.resample, d, up.spf.rng)
+    ps = resample(up.spf.resample, d, up.spf.rng)
+    return RoombaBelief(ps, false, RoombaAct(0.,1.0), nothing)
+    return RoombaBelief(ps, nothing, nothing, nothing)
 end
